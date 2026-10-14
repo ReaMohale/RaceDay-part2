@@ -1,23 +1,86 @@
+using System.Reflection;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.OpenApi.Models;
+using RaceDay.Api.Data;
+using RaceDay.Api.Middleware;
+using RaceDay.Api.Swagger;
+using RaceDay.Api.Security;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
+// Database (EF Core, SQL Server)
+builder.Services.AddDbContext<RaceDayDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("RaceDayDb")));
+
+builder.Services.AddSingleton<IPasswordService, PasswordService>();
+
+// Server-side session: stores the logged-in user's ID and role.
+builder.Services.AddDistributedMemoryCache();
+builder.Services.AddSession(options =>
+{
+    options.Cookie.Name = ".RaceDay.Session";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.IsEssential = true;
+    options.Cookie.SameSite = SameSiteMode.Lax;
+    options.IdleTimeout = TimeSpan.FromMinutes(30);
+});
 
 builder.Services.AddControllers();
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
-builder.Services.AddOpenApi();
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "RaceDay API",
+        Version = "v1",
+        Description = "Event management API for South African road running, walking and cycling events. " +
+                      "Log in via POST /api/auth/login first - the session cookie is then sent automatically by Swagger UI."
+    });
+
+    var xmlFile = Path.Combine(AppContext.BaseDirectory, $"{Assembly.GetExecutingAssembly().GetName().Name}.xml");
+    if (File.Exists(xmlFile))
+        options.IncludeXmlComments(xmlFile);
+});
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+// Development only: let Entity Framework apply migrations and seed demo data.
+// Skipped automatically when no migrations exist yet or when using the in-memory test database.
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<RaceDayDbContext>();
+    try
+    {
+        if (db.Database.IsSqlServer() && db.Database.GetMigrations().Any())
+        {
+            db.Database.Migrate();
+            DbSeeder.Seed(db, scope.ServiceProvider.GetRequiredService<IPasswordService>());
+        }
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "Could not migrate or seed the database. Check the connection string in appsettings.json.");
+        throw;
+    }
 }
 
+app.UseMiddleware<ExceptionHandlingMiddleware>();
+
+// Swagger stays on in every environment so the API can be demonstrated and marked.
+app.UseSwagger();
+app.UseSwaggerUI(options =>
+{
+    options.SwaggerEndpoint("/swagger/v1/swagger.json", "RaceDay API v1");
+    options.DocumentTitle = "RaceDay API";
+    options.HeadContent = SwaggerTheme.HeadContent;
+});
+
 app.UseHttpsRedirection();
-
-app.UseAuthorization();
-
+app.UseSession();
 app.MapControllers();
 
 app.Run();
+
+// Makes Program visible to the test project (WebApplicationFactory).
+public partial class Program { }
