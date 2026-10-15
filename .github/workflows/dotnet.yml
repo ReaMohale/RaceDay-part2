@@ -1,0 +1,27 @@
+name: RaceDay CI
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore dependencies
+        run: dotnet restore RaceDay.Api.slnx
+
+      - name: Build
+        run: dotnet build RaceDay.Api.slnx --no-restore --configuration Release
+
+      - name: Run unit tests
+        run: dotnet test RaceDay.Api.slnx --no-build --configuration Release --verbosity normal
