@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RaceDay.Api.Data;
@@ -15,10 +16,21 @@ public class RaceDayFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
     {
-        builder.ConfigureServices(services =>
+        // ConfigureTestServices runs AFTER Program.cs has registered the SQL Server DbContext,
+        // so we can remove it. (Plain ConfigureServices runs too early with minimal hosting.)
+        builder.ConfigureTestServices(services =>
         {
-            var descriptor = services.SingleOrDefault(d => d.ServiceType == typeof(DbContextOptions<RaceDayDbContext>));
-            if (descriptor is not null)
+            // Newer EF Core versions register the provider setup in two places, so remove both.
+            // If SQL Server stays registered next to the in-memory provider, EF throws on startup.
+            var toRemove = services
+                .Where(d => d.ServiceType == typeof(DbContextOptions<RaceDayDbContext>)
+                            || d.ServiceType == typeof(DbContextOptions)
+                            || (d.ServiceType.IsGenericType
+                                && d.ServiceType.Name.StartsWith("IDbContextOptionsConfiguration")
+                                && d.ServiceType.GenericTypeArguments[0] == typeof(RaceDayDbContext)))
+                .ToList();
+
+            foreach (var descriptor in toRemove)
                 services.Remove(descriptor);
 
             services.AddDbContext<RaceDayDbContext>(options => options.UseInMemoryDatabase(this._dbName));
